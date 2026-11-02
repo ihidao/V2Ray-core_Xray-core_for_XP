@@ -1,0 +1,114 @@
+name: Build v2ray-core_5.24 for XP1
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-xp:
+    runs-on: ubuntu-latest
+    steps:
+      # 1. 获取当前仓库 (主要用于获取 workflow 文件本身)
+      - name: Checkout this repository
+        uses: actions/checkout@v4
+
+      # 2. 获取 BieHDC 的 XP 魔改版 Go 源码
+      - name: Checkout go-backports (XP Go 1.21)
+        uses: actions/checkout@v4
+        with:
+          repository: BieHDC/go-backports
+          ref: release-branch.go1.21-nt51
+          path: go-backports
+
+      # 3. 获取 v2ray-core 5.24.0 源码 (动态下载，无需放在你的仓库中)
+      - name: Checkout v2ray-core source
+        uses: actions/checkout@v4
+        with:
+          repository: v2fly/v2ray-core
+          ref: v5.24.0
+          path: v2ray-core_5.24.0
+
+      # 4. 设置 Bootstrap Go (⚠️ 必须用 1.20.x 来编译 1.21)
+      - name: Setup bootstrap Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.20.14' 
+          cache-dependency-path: v2ray-core_5.24.0/go.sum
+
+      # 5. 从源码编译 XP 兼容的 Go 工具链
+      - name: Build XP-compatible Go toolchain
+        working-directory: go-backports/src
+        run: |
+          # 编译 Go 工具链本身不需要禁用 CGO，保持默认即可
+          ./make.bash
+
+      # 6. 将编译好的 XP Go 加入环境变量
+      - name: Add XP Go to PATH
+        run: |
+          echo "$GITHUB_WORKSPACE/go-backports/bin" >> $GITHUB_PATH
+          echo "GOROOT=$GITHUB_WORKSPACE/go-backports" >> $GITHUB_ENV
+          go version
+
+      # 7. 验证 v2ray 源码目录 (修复了原有的 Shell 语法错误)
+      - name: Verify v2ray source path
+        id: src
+        run: |
+          V2RAY_DIR="v2ray-core_5.24.0"
+          if [ -d "$V2RAY_DIR" ]; then
+              echo "path=$V2RAY_DIR" >> $GITHUB_OUTPUT
+              echo "✅ 找到源码目录: $V2RAY_DIR"
+          else
+              echo "::error::❌ 找不到 v2ray 5.24 源码目录"
+              ls -la
+              exit 1
+          fi
+
+      # 8. 下载 v2ray 依赖
+      - name: Download modules
+        working-directory: ${{ steps.src.outputs.path }}
+        run: go mod download
+
+      # 9. 交叉编译 v2ray-core (32位 XP 版)
+      - name: Build for Windows XP (386)
+        working-directory: ${{ steps.src.outputs.path }}
+        env:
+          CGO_ENABLED: 0
+          GOOS: windows
+          GOARCH: 386
+        run: |
+          # 增加 -H=windowsgui 参数，运行时无黑框，更适合 XP 后台服务
+          go build -o v2ray.exe -trimpath -ldflags "-s -w -H=windowsgui -buildid=" ./main
+          ls -lh v2ray.exe
+
+      # 10. 打包输出文件
+      - name: Prepare output
+        run: |
+          SRC="${{ steps.src.outputs.path }}"
+          mkdir -p dist
+          cp "$SRC/v2ray.exe" dist/
+          ls -lh dist/
+          cd dist
+          zip -r ../v2ray-5.24-windows-xp-386.zip .
+
+      # 11. 上传 Artifact (用于手动测试)
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: v2ray-5.24-windows-xp-386
+          path: dist/
+          retention-days: 30
+
+      # 12. 发布 Release (仅在打 Tag 时触发)
+      - name: Create Release (when tagged)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: v2ray-5.24-windows-xp-386.zip
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
