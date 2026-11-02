@@ -68,7 +68,7 @@ jobs:
           go build -o v2ctl.exe -trimpath -ldflags "-s -w -buildid=" -tags confonly ./infra/control/main || true
 
       - name: Prepare output
-           run: |
+        run: |
           SRC=${{ steps.src.outputs.path }}
           mkdir -p dist
           cp $SRC/v2ray.exe dist/
