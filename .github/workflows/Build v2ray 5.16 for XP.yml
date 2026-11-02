@@ -67,23 +67,24 @@ jobs:
           go build -o v2ray.exe -trimpath -ldflags "-s -w -buildid=" ./main
           go build -o v2ctl.exe -trimpath -ldflags "-s -w -buildid=" -tags confonly ./infra/control/main || true
 
-      - name: Package
-        run: |
+           - name: Prepare output
+           run: |
           SRC=${{ steps.src.outputs.path }}
           mkdir -p dist
           cp $SRC/v2ray.exe dist/
           [ -f $SRC/v2ctl.exe ] && cp $SRC/v2ctl.exe dist/ || true
           cd dist
           zip -r ../v2ray-5.16-windows-xp-386.zip .
-          ls -lh ../v2ray-5.16-windows-xp-386.zip
 
+      # 给 Actions 页面下载用（只有一层）
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: v2ray-5.16-windows-xp-386
-          path: v2ray-5.16-windows-xp-386.zip
+          path: dist/
           retention-days: 30
 
+      # 给 Release 用（带 zip）
       - name: Create Release (when tagged)
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
