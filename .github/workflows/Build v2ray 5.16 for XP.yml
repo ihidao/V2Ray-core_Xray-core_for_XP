@@ -27,6 +27,7 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: '1.21.13'
+          cache-dependency-path: v2ray-core_5.16.0/go.sum
 
       - name: Build XP-compatible Go toolchain
         working-directory: go-backports/src
