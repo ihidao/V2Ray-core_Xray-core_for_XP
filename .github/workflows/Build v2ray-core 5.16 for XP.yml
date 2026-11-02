@@ -67,7 +67,7 @@ jobs:
           go build -o v2ray.exe -trimpath -ldflags "-s -w -buildid=" ./main
           go build -o v2ctl.exe -trimpath -ldflags "-s -w -buildid=" -tags confonly ./infra/control/main || true
 
-           - name: Prepare output
+      - name: Prepare output
            run: |
           SRC=${{ steps.src.outputs.path }}
           mkdir -p dist
