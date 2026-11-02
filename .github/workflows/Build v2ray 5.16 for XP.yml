@@ -42,8 +42,8 @@ jobs:
       - name: Determine v2ray source path
         id: src
         run: |
-          if [ -d "v2ray-core" ]; then
-            echo "path=v2ray-core" >> $GITHUB_OUTPUT
+          if [ -d "v2ray-core_5.16.0" ]; then
+            echo "path=v2ray-core_5.16.0" >> $GITHUB_OUTPUT
           elif [ -d "v2ray" ]; then
             echo "path=v2ray" >> $GITHUB_OUTPUT
           else
