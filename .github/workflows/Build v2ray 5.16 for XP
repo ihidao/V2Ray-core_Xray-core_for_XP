@@ -1,4 +1,4 @@
-name: Build v2ray 5.16 for Windows XP
+name: Build v2ray 5.16 for XP
 
 on:
   workflow_dispatch:          # 手动触发
