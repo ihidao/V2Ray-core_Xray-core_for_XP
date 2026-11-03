@@ -1,0 +1,132 @@
+
+name: Build v2rayA for XP
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/build-v2raya-xp.yml"
+
+permissions:
+  contents: read
+
+env:
+  V2RAYA_TAG: v2.2.7.5
+  GO_BRANCH: release-branch.go1.21-nt51
+  GOOS: windows
+  GOARCH: "386"
+  CGO_ENABLED: "0"
+  GOPROXY: https://proxy.golang.org,direct
+
+jobs:
+  build:
+    name: Build Windows XP x86
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Install bootstrap Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.21.13"
+          cache: false
+
+      - name: Checkout Go XP source
+        run: |
+          git clone --depth 1 \
+            --branch "${GO_BRANCH}" \
+            https://github.com/BieHDC/go-backports.git \
+            go-backports
+
+      - name: Build Go XP cross compiler
+        shell: bash
+        run: |
+          set -eux
+
+          cd go-backports/src
+
+          export GOROOT_BOOTSTRAP="$(go env GOROOT)"
+          export CGO_ENABLED=0
+
+          ./make.bash
+
+          cd ../..
+
+          echo "GOROOT=$GITHUB_WORKSPACE/go-backports" >> "$GITHUB_ENV"
+          echo "$GITHUB_WORKSPACE/go-backports/bin" >> "$GITHUB_PATH"
+
+      - name: Verify XP Go toolchain
+        run: |
+          go version
+          go env GOOS GOARCH GOROOT
+
+      - name: Checkout v2rayA
+        run: |
+          git clone --depth 1 \
+            --branch "${V2RAYA_TAG}" \
+            https://github.com/v2rayA/v2rayA.git \
+            v2rayA
+
+      - name: Download Go dependencies
+        working-directory: v2rayA/service
+        run: |
+          go mod download
+          go mod verify
+
+      - name: Build v2rayA
+        working-directory: v2rayA/service
+        shell: bash
+        run: |
+          set -eux
+
+          mkdir -p ../dist
+
+          export GOOS=windows
+          export GOARCH=386
+          export CGO_ENABLED=0
+
+          go build \
+            -trimpath \
+            -tags "netgo osusergo" \
+            -ldflags "-s -w -X github.com/v2rayA/v2rayA/conf.Version=${V2RAYA_TAG#v}" \
+            -o ../dist/v2raya.exe \
+            .
+
+      - name: Verify executable
+        run: |
+          file v2rayA/dist/v2raya.exe
+          ls -lh v2rayA/dist/v2raya.exe
+
+      - name: Package release
+        run: |
+          cd v2rayA/dist
+
+          cat > README.txt <<'EOF'
+          v2rayA Windows XP x86 build
+
+          Version: v2.2.7.5
+          Architecture: Windows 32-bit x86
+          Go: BieHDC/go-backports Go 1.21 NT5.1
+          CGO: disabled
+
+          Run:
+          v2raya.exe --lite --v2ray-bin v2ray.exe
+
+          Open:
+          http://127.0.0.1:2017
+
+          The V2Ray core is not included.
+          EOF
+
+          zip -9 ../v2raya-xp-x86.zip \
+            v2raya.exe README.txt
+
+      - name: Upload XP build
+        uses: actions/upload-artifact@v4
+        with:
+          name: v2raya-xp-x86
+          path: |
+            v2rayA/dist/v2raya.exe
+            v2rayA/v2raya-xp-x86.zip
+          if-no-files-found: error
