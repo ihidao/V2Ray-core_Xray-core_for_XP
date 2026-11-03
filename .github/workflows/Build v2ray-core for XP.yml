@@ -28,7 +28,8 @@ permissions:
   contents: write
 
 jobs:
-  build_v2ray-core_for_xp:
+  build:
+    name: build v2ray_${{ inputs.v2ray_version }}_for_xp
     runs-on: ubuntu-latest
 
     steps:
