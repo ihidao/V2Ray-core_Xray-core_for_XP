@@ -1,6 +1,6 @@
 name: Build Xray-core for XP
 
-run-name: Xray_${{ inputs.xray_ref }}_XP
+run-name: Xray-core_${{ inputs.xray_ref }}_XP
 
 on:
   workflow_dispatch:
@@ -16,7 +16,7 @@ permissions:
 
 jobs:
   build:
-    name: Build Xray ${{ inputs.xray_ref }} XP x86
+    name: Build Xray-core ${{ inputs.xray_ref }} XP x86
     runs-on: ubuntu-latest
 
     env:
@@ -245,7 +245,7 @@ jobs:
       - name: Upload Xray XP
         uses: actions/upload-artifact@v4
         with:
-          name: Xray-${{ inputs.xray_ref }}-Windows-XP-x86
+          name: Xray-core_${{ inputs.xray_ref }}_XP_x86
           path: dist/xray.exe
           if-no-files-found: error
           retention-days: 30
