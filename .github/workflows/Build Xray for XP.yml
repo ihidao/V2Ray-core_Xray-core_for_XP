@@ -7,7 +7,7 @@ on:
       source_ref:
         description: "Xray 源码版本"
         required: true
-        default: "v1.8.24"
+        default: "v1.8.9"
 
 permissions:
   contents: read
