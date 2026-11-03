@@ -1,0 +1,108 @@
+
+name: Build Xray for XP
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: "Xray 源码版本"
+        required: true
+        default: "v1.8.24"
+
+permissions:
+  contents: read
+
+env:
+  XRAY_REPO: XTLS/Xray-core
+  XRAY_REF: ${{ inputs.source_ref }}
+  GO_BACKPORTS_REPO: BieHDC/go-backports
+  GO_BACKPORTS_REF: release-branch.go1.21-nt51
+  BOOTSTRAP_GO_VERSION: "1.21.13"
+
+jobs:
+  build_xray_for_xp:
+    runs-on: ubuntu-lastest
+
+    steps:
+      - name: Checkout Xray
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.XRAY_REPO }}
+          ref: ${{ env.XRAY_REF }}
+          path: xray-src
+          fetch-depth: 1
+
+      - name: Setup bootstrap Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.BOOTSTRAP_GO_VERSION }}
+          check-latest: false
+
+      - name: Checkout Go backports
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.GO_BACKPORTS_REPO }}
+          ref: ${{ env.GO_BACKPORTS_REF }}
+          path: go-backports
+          fetch-depth: 1
+
+      - name: Build XP Go toolchain
+        shell: bash
+        run: |
+          set -eux
+
+          export GOROOT_BOOTSTRAP="$(go env GOROOT)"
+          export CGO_ENABLED=0
+
+          cd go-backports/src
+          ./make.bash
+
+          cd "$GITHUB_WORKSPACE"
+
+          export GOROOT="$GITHUB_WORKSPACE/go-backports"
+          export PATH="$GOROOT/bin:$PATH"
+
+          go version
+
+      - name: Build Xray Windows XP 32-bit
+        shell: bash
+        run: |
+          set -eux
+
+          export GOROOT="$GITHUB_WORKSPACE/go-backports"
+          export PATH="$GOROOT/bin:$PATH"
+
+          export GOTOOLCHAIN=local
+          export GOOS=windows
+          export GOARCH=386
+          export CGO_ENABLED=0
+
+          cd xray-src
+
+          echo "===== Xray version ====="
+          git describe --tags --always
+
+          echo "===== Go version ====="
+          go version
+
+          echo "===== Go module ====="
+          head -n 8 go.mod
+
+          go mod download
+
+          go build -v \
+            -trimpath \
+            -buildvcs=false \
+            -ldflags="-s -w -buildid=" \
+            -o "$GITHUB_WORKSPACE/xray.exe" \
+            ./main
+
+          file "$GITHUB_WORKSPACE/xray.exe"
+          ls -lh "$GITHUB_WORKSPACE/xray.exe"
+
+      - name: Upload Xray
+        uses: actions/upload-artifact@v4
+        with:
+          name: xray_${{ inputs.source_ref }}_xp_386
+          path: xray.exe
+          if-no-files-found: error
