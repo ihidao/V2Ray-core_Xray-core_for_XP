@@ -31,7 +31,7 @@ permissions:
 
 jobs:
   build:
-    name: build v2ray_${{ inputs.v2ray_version }}_for_xp
+    name: build v2ray-core_${{ inputs.v2ray_version }}_for_xp
     runs-on: ubuntu-latest
 
     steps:
@@ -178,7 +178,7 @@ jobs:
 
           cd dist
 
-          zip -r "../v2ray_${VERSION}_xp_386.zip" .
+          zip -r "../v2ray_${VERSION}_xp_x86.zip" .
 
       # ------------------------------------------------------
       # 11. 上传 Actions Artifact
@@ -186,7 +186,7 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: v2ray_${{ steps.version.outputs.version }}_xp_386
+          name: v2ray_${{ steps.version.outputs.version }}_xp_x86
           path: |
             dist/v2ray.exe
             dist/v2ctl.exe
@@ -200,7 +200,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: v2ray_${{ steps.version.outputs.version }}_xp_386.zip
+          files: v2ray_${{ steps.version.outputs.version }}_xp_x86.zip
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
