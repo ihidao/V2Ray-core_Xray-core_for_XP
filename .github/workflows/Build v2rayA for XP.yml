@@ -98,31 +98,27 @@ jobs:
           echo "Web frontend prepared successfully"
           find service/server/router/web -maxdepth 2 -type f | head -20
 
-      - name: Fix Windows XP dependencies
+      - name: Fix and verify XP dependencies
         working-directory: v2rayA/service
         shell: bash
         run: |
           set -eux
 
-          # 降级 xdg，移除 Windows Vista+ Known Folders API 依赖
+          # 将 xdg 降级到 XP 兼容版本
           go mod edit \
             -replace=github.com/adrg/xdg=github.com/adrg/xdg@v0.3.4
 
-          # 检查替换结果
-          go list -m github.com/adrg/xdg
+          # 重新整理依赖关系，生成完整 go.sum
+          go mod tidy
 
           # 下载依赖
           go mod download
 
-          # 检查最终依赖版本
-          go list -m all | grep -E 'adrg/xdg|golang.org/x/sys'
-
-      - name: Download Go dependencies
-        working-directory: v2rayA/service
-        run: |
-          go mod download
+          # 验证依赖完整性
           go mod verify
 
+          # 确认实际使用的版本
+          go list -m -json github.com/adrg/xdg
       - name: Build v2rayA
         working-directory: v2rayA/service
         shell: bash
@@ -136,12 +132,12 @@ jobs:
           export CGO_ENABLED=0
 
           go build \
+            -mod=mod \
             -trimpath \
             -tags "netgo osusergo" \
-            -ldflags "-s -w -X github.com/v2rayA/v2rayA/conf.Version=${V2RAYA_TAG#v}" \
+            -ldflags "-s -w" \
             -o ../dist/v2raya.exe \
             .
-
       - name: Verify executable
         run: |
           file v2rayA/dist/v2raya.exe
