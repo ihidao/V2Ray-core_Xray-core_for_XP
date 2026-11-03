@@ -1,118 +1,251 @@
+name: Build Xray XP
 
-name: Build Xray for XP
+run-name: Build Xray ${{ inputs.xray_ref }} XP x86
 
 on:
   workflow_dispatch:
     inputs:
-      source_ref:
-        description: "Xray 源码版本"
+      xray_ref:
+        description: "Xray-core 源码版本"
         required: true
-        default: "v1.8.7"
+        default: "v1.8.5"
+        type: string
 
 permissions:
   contents: read
 
-env:
-  XRAY_REPO: XTLS/Xray-core
-  XRAY_REF: ${{ inputs.source_ref }}
-  GO_BACKPORTS_REPO: BieHDC/go-backports
-  GO_BACKPORTS_REF: release-branch.go1.21-nt51
-  BOOTSTRAP_GO_VERSION: "1.21.13"
-
 jobs:
   build:
-    name: build xray_${{ inputs.source_ref }}_xp_386
+    name: Build Xray ${{ inputs.xray_ref }} XP x86
     runs-on: ubuntu-latest
 
+    env:
+      XRAY_REPO: XTLS/Xray-core
+      GO_BACKPORTS_REPO: BieHDC/go-backports
+      GO_BACKPORTS_REF: release-branch.go1.21-nt51
+      BOOTSTRAP_GO_VERSION: "1.21.13"
+
+      GOOS: windows
+      GOARCH: "386"
+      CGO_ENABLED: "0"
+      GOTOOLCHAIN: local
+
     steps:
+      # ==========================================
+      # 1. 获取 Xray 源码
+      # ==========================================
       - name: Checkout Xray
         uses: actions/checkout@v4
         with:
-          repository: ${{ env.XRAY_REPO }}
-          ref: ${{ env.XRAY_REF }}
+          repository: XTLS/Xray-core
+          ref: ${{ inputs.xray_ref }}
           path: xray-src
-          fetch-depth: 1
+          fetch-depth: 0
 
-      - name: Setup bootstrap Go
+      # ==========================================
+      # 2. 安装 Bootstrap Go
+      # ==========================================
+      - name: Setup Bootstrap Go
         uses: actions/setup-go@v5
         with:
           go-version: ${{ env.BOOTSTRAP_GO_VERSION }}
           check-latest: false
 
-      - name: Checkout Go backports
+      # ==========================================
+      # 3. 获取 Go XP backports
+      # ==========================================
+      - name: Checkout Go Backports
         uses: actions/checkout@v4
         with:
-          repository: ${{ env.GO_BACKPORTS_REPO }}
-          ref: ${{ env.GO_BACKPORTS_REF }}
+          repository: BieHDC/go-backports
+          ref: release-branch.go1.21-nt51
           path: go-backports
           fetch-depth: 1
 
-      - name: Build XP Go toolchain
+      # ==========================================
+      # 4. 编译 XP 专用 Go 工具链
+      # ==========================================
+      - name: Build Go Backports
         shell: bash
         run: |
           set -eux
 
-          export GOROOT_BOOTSTRAP="$(go env GOROOT)"
-          export CGO_ENABLED=0
+          BOOTSTRAP_GOROOT="$(go env GOROOT)"
 
           cd go-backports/src
-          ./make.bash
+
+          GOROOT_BOOTSTRAP="$BOOTSTRAP_GOROOT" ./make.bash
 
           cd "$GITHUB_WORKSPACE"
 
-          export GOROOT="$GITHUB_WORKSPACE/go-backports"
-          export PATH="$GOROOT/bin:$PATH"
+          echo "GOROOT=$GITHUB_WORKSPACE/go-backports" >> "$GITHUB_ENV"
+          echo "$GITHUB_WORKSPACE/go-backports/bin" >> "$GITHUB_PATH"
 
-          go version
-
-      - name: Build Xray Windows XP 32-bit
+      # ==========================================
+      # 5. 检查 Go 工具链
+      # ==========================================
+      - name: Check Go Toolchain
         shell: bash
         run: |
           set -eux
 
-          export GOROOT="$GITHUB_WORKSPACE/go-backports"
-          export PATH="$GOROOT/bin:$PATH"
+          go version
+          go env GOROOT
+          go env GOOS
+          go env GOARCH
 
-          export GOTOOLCHAIN=local
-          export GOOS=windows
-          export GOARCH=386
-          export CGO_ENABLED=0
+      # ==========================================
+      # 6. 下载 Xray 依赖
+      # ==========================================
+      - name: Download Dependencies
+        shell: bash
+        run: |
+          set -eux
 
           cd xray-src
 
-          echo "===== Xray version ====="
-          git describe --tags --always
-
-          echo "===== Go version ====="
-          go version
-
-          echo "===== Go module ====="
-          head -n 8 go.mod
-
           go mod download
 
-          WG_DIR=$(go list -m -f '{{.Dir}}' golang.zx2c4.com/wireguard)
-          echo "WireGuard directory: $WG_DIR"
+          go list -m golang.zx2c4.com/wireguard
 
-          echo "===== uapi_windows.go ====="
-          nl -ba "$WG_DIR/ipc/uapi_windows.go" | sed -n '35,75p'
+      # ==========================================
+      # 7. 禁用 WireGuard Windows IPC
+      # ==========================================
+      - name: Disable WireGuard Windows IPC
+        shell: bash
+        run: |
+          set -eux
 
-          echo "===== Xray WireGuard imports ====="
-          grep -RInE 'proxy/wireguard|golang.zx2c4.com/wireguard' \
-          --include='*.go' . || true
-          go build -v \
+          cd xray-src
+
+          WG_DIR="$(go list -m -f '{{.Dir}}' golang.zx2c4.com/wireguard)"
+
+          FILE="$WG_DIR/ipc/uapi_windows.go"
+
+          echo "WireGuard source: $FILE"
+
+          if [ ! -f "$FILE" ]; then
+            echo "ERROR: uapi_windows.go not found"
+            exit 1
+          fi
+
+          python3 - "$FILE" <<'PY'
+          import sys
+          import re
+
+          path = sys.argv[1]
+
+          with open(path, "r", encoding="utf-8") as f:
+              src = f.read()
+
+          # --------------------------------------
+          # 1. 禁用 Windows IPC 初始化
+          # --------------------------------------
+
+          pattern = (
+              r'func init\(\)\s*\{\s*'
+              r'var err error\s*'
+              r'UAPISecurityDescriptor,\s*err\s*=\s*'
+              r'windows\.SecurityDescriptorFromString\([^\n]*\)\s*'
+              r'if err != nil\s*\{\s*'
+              r'panic\(err\)\s*'
+              r'\}\s*'
+              r'\}'
+          )
+
+          replacement = '''func init() {
+              // Disabled for Windows XP.
+              UAPISecurityDescriptor = nil
+          }'''
+
+          src, count = re.subn(pattern, replacement, src, count=1)
+
+          if count != 1:
+              print("ERROR: WireGuard init() pattern not found")
+              sys.exit(1)
+
+          # --------------------------------------
+          # 2. 禁止创建 WireGuard Windows UAPI
+          # --------------------------------------
+
+          signature = 'func UAPIListen(name string) (net.Listener, error) {'
+
+          if signature not in src:
+              print("ERROR: UAPIListen() not found")
+              sys.exit(1)
+
+          if '"errors"' not in src:
+              if 'import (' not in src:
+                  print("ERROR: Cannot locate import block")
+                  sys.exit(1)
+
+              src = src.replace(
+                  'import (',
+                  'import (\n\t"errors"',
+                  1
+              )
+
+          src = src.replace(
+              signature,
+              signature + '''
+              return nil, errors.New("WireGuard UAPI disabled on Windows XP")
+          ''',
+              1
+          )
+
+          with open(path, "w", encoding="utf-8") as f:
+              f.write(src)
+
+          print("WireGuard Windows IPC disabled.")
+          PY
+
+          # 格式化修改后的源码
+          gofmt -w "$FILE"
+
+          # 显示修改结果
+          grep -n -A 5 'func init()' "$FILE"
+          grep -n -A 5 'func UAPIListen' "$FILE"
+
+      # ==========================================
+      # 8. 编译 Windows XP 32 位 Xray
+      # ==========================================
+      - name: Build Xray Windows XP x86
+        shell: bash
+        run: |
+          set -eux
+
+          cd xray-src
+
+          mkdir -p ../dist
+
+          go build \
             -trimpath \
             -buildvcs=false \
             -ldflags="-s -w -buildid=" \
-            -o "$GITHUB_WORKSPACE/xray.exe" \
-            ./main
+            -o ../dist/xray.exe \
+            -v ./main
 
-          file "$GITHUB_WORKSPACE/xray.exe"
-          ls -lh "$GITHUB_WORKSPACE/xray.exe"
+      # ==========================================
+      # 9. 检查编译结果
+      # ==========================================
+      - name: Verify Build
+        shell: bash
+        run: |
+          set -eux
 
-      - name: Upload Xray
+          ls -lh dist/xray.exe
+
+          file dist/xray.exe
+
+          echo "Build completed."
+
+      # ==========================================
+      # 10. 上传编译文件
+      # ==========================================
+      - name: Upload Xray XP
         uses: actions/upload-artifact@v4
         with:
-          name: xray_${{ inputs.source_ref }}_xp_386
-          path: xray.exe
+          name: Xray-${{ inputs.xray_ref }}-Windows-XP-x86
+          path: dist/xray.exe
           if-no-files-found: error
+          retention-days: 30
