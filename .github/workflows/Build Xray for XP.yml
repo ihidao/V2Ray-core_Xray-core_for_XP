@@ -108,7 +108,7 @@ jobs:
 
           go list -m golang.zx2c4.com/wireguard
 
-      # ==========================================
+            # ==========================================
       # 7. 禁用 WireGuard Windows IPC
       # ==========================================
       - name: Disable WireGuard Windows IPC
@@ -118,17 +118,24 @@ jobs:
 
           cd xray-src
 
+          # 获取 WireGuard 模块目录
           WG_DIR="$(go list -m -f '{{.Dir}}' golang.zx2c4.com/wireguard)"
 
-          FILE="$WG_DIR/ipc/uapi_windows.go"
+          # 复制到可写目录
+          PATCH_DIR="$GITHUB_WORKSPACE/wireguard-xp"
 
-          echo "WireGuard source: $FILE"
+          rm -rf "$PATCH_DIR"
+          mkdir -p "$PATCH_DIR"
 
-          if [ ! -f "$FILE" ]; then
-            echo "ERROR: uapi_windows.go not found"
-            exit 1
-          fi
+          cp -a "$WG_DIR/." "$PATCH_DIR/"
 
+          chmod -R u+w "$PATCH_DIR"
+
+          FILE="$PATCH_DIR/ipc/uapi_windows.go"
+
+          echo "Patching: $FILE"
+
+          # 修改 WireGuard Windows IPC
           python3 - "$FILE" <<'PY'
           import sys
           import re
@@ -137,10 +144,6 @@ jobs:
 
           with open(path, "r", encoding="utf-8") as f:
               src = f.read()
-
-          # --------------------------------------
-          # 1. 禁用 Windows IPC 初始化
-          # --------------------------------------
 
           pattern = (
               r'func init\(\)\s*\{\s*'
@@ -161,12 +164,8 @@ jobs:
           src, count = re.subn(pattern, replacement, src, count=1)
 
           if count != 1:
-              print("ERROR: WireGuard init() pattern not found")
+              print("ERROR: Original init() not found")
               sys.exit(1)
-
-          # --------------------------------------
-          # 2. 禁止创建 WireGuard Windows UAPI
-          # --------------------------------------
 
           signature = 'func UAPIListen(name string) (net.Listener, error) {'
 
@@ -175,10 +174,6 @@ jobs:
               sys.exit(1)
 
           if '"errors"' not in src:
-              if 'import (' not in src:
-                  print("ERROR: Cannot locate import block")
-                  sys.exit(1)
-
               src = src.replace(
                   'import (',
                   'import (\n\t"errors"',
@@ -196,15 +191,20 @@ jobs:
           with open(path, "w", encoding="utf-8") as f:
               f.write(src)
 
-          print("WireGuard Windows IPC disabled.")
+          print("WireGuard IPC patched successfully.")
           PY
 
-          # 格式化修改后的源码
           gofmt -w "$FILE"
 
-          # 显示修改结果
+          # 使用本地修改后的 WireGuard 模块
+          go mod edit -replace="golang.zx2c4.com/wireguard=$PATCH_DIR"
+
+          echo "===== Verify patch ====="
           grep -n -A 5 'func init()' "$FILE"
           grep -n -A 5 'func UAPIListen' "$FILE"
+
+          echo "===== Verify replace ====="
+          go list -m golang.zx2c4.com/wireguard
 
       # ==========================================
       # 8. 编译 Windows XP 32 位 Xray
