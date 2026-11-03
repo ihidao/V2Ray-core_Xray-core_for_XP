@@ -1,6 +1,6 @@
 name: Build Xray-core for XP
 
-run-name: Xray ${{ inputs.xray_ref }} XP x86
+run-name: Xray_${{ inputs.xray_ref }}_XP
 
 on:
   workflow_dispatch:
