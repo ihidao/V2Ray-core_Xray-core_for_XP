@@ -1,4 +1,4 @@
-name: Build Xray XP
+name: Build Xray for XP
 
 run-name: Build Xray ${{ inputs.xray_ref }} XP x86
 
