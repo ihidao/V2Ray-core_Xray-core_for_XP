@@ -1,5 +1,7 @@
 
 name: Build v2ray-core for XP
+run-name: v2ray_${{ inputs.v2ray_version }}_for_xp
+
 
 on:
   workflow_dispatch:
