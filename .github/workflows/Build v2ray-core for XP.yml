@@ -1,13 +1,13 @@
 
-name: Build v2ray-core_5.18.0 for XP
+name: Build v2ray-core for XP
 
 on:
   workflow_dispatch:
     inputs:
       v2ray_version:
-        description: 'V2Ray version (e.g. 5.16.0)'
+        description: 'V2Ray version (e.g. 5.18.0)'
         required: false
-        default: '5.16.0'
+        default: '5.18.0'
         type: string
 
   push:
@@ -18,7 +18,7 @@ on:
 # 全局版本变量：通常只需要修改这里
 # ==========================================================
 env:
-  V2RAY_VERSION: '5.16.0'
+  V2RAY_VERSION: '5.18.0'
   GO_VERSION: '1.21.13'
   SOURCE_PREFIX: 'v2ray-core_'
   GO_BACKPORTS_REPO: 'BieHDC/go-backports'
