@@ -25,7 +25,7 @@ env:
   GO_BACKPORTS_REPO: 'BieHDC/go-backports'
   GO_BACKPORTS_REF: 'release-branch.go1.21-nt51'
 
-  CLASH_REPO: 'Dreamacro/clash'
+  CLASH_REPO: 'MetaCubeX/mihomo'
 
 permissions:
   contents: write
