@@ -15,9 +15,6 @@ permissions:
 env:
   V2RAYA_TAG: v2.2.7.5
   GO_BRANCH: release-branch.go1.21-nt51
-  GOOS: windows
-  GOARCH: "386"
-  CGO_ENABLED: "0"
   GOPROXY: https://proxy.golang.org,direct
 
 jobs:
@@ -26,19 +23,31 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
+      # --------------------------------------------------
+      # 1. 安装 Bootstrap Go
+      # --------------------------------------------------
       - name: Install bootstrap Go
         uses: actions/setup-go@v5
         with:
           go-version: "1.21.13"
           cache: false
 
+      # --------------------------------------------------
+      # 2. 下载 XP 兼容 Go 源码
+      # --------------------------------------------------
       - name: Checkout Go XP source
+        shell: bash
         run: |
+          set -eux
+
           git clone --depth 1 \
             --branch "${GO_BRANCH}" \
             https://github.com/BieHDC/go-backports.git \
             go-backports
 
+      # --------------------------------------------------
+      # 3. 编译 Go XP 工具链
+      # --------------------------------------------------
       - name: Build Go XP cross compiler
         shell: bash
         run: |
@@ -47,7 +56,9 @@ jobs:
           cd go-backports/src
 
           export GOROOT_BOOTSTRAP="$(go env GOROOT)"
-          export CGO_ENABLED=0
+          unset GOOS
+          unset GOARCH
+          unset CGO_ENABLED
 
           ./make.bash
 
@@ -56,18 +67,34 @@ jobs:
           echo "GOROOT=$GITHUB_WORKSPACE/go-backports" >> "$GITHUB_ENV"
           echo "$GITHUB_WORKSPACE/go-backports/bin" >> "$GITHUB_PATH"
 
+      # --------------------------------------------------
+      # 4. 检查 Go XP 工具链
+      # --------------------------------------------------
       - name: Verify XP Go toolchain
+        shell: bash
         run: |
-          go version
-          go env GOOS GOARCH GOROOT
+          set -eux
 
+          go version
+          go env GOROOT
+          go env GOHOSTOS GOHOSTARCH
+
+      # --------------------------------------------------
+      # 5. 下载 v2rayA 源码
+      # --------------------------------------------------
       - name: Checkout v2rayA
+        shell: bash
         run: |
+          set -eux
+
           git clone --depth 1 \
             --branch "${V2RAYA_TAG}" \
             https://github.com/v2rayA/v2rayA.git \
             v2rayA
 
+      # --------------------------------------------------
+      # 6. 下载并准备 Web 前端
+      # --------------------------------------------------
       - name: Download and prepare Web frontend
         shell: bash
         run: |
@@ -75,79 +102,137 @@ jobs:
 
           cd v2rayA
 
-          # 下载 v2.2.7.5 官方 Web 前端
           curl -fL \
             https://github.com/v2rayA/v2rayA/releases/download/v2.2.7.5/web.tar.gz \
             -o web.tar.gz
 
-          # 校验文件完整性
           echo "89bff9248a9cba8b7bda6e1202ac565dbca377319423868835235deddbfb182a  web.tar.gz" \
             | sha256sum -c -
 
-          # 创建 Go embed 所需目录
           mkdir -p service/server/router/web
 
-          # 解压前端文件
           tar -xzf web.tar.gz \
             -C service/server/router/web \
             --strip-components=1
 
-          # 确认静态文件存在
           test -n "$(find service/server/router/web -type f -print -quit)"
 
           echo "Web frontend prepared successfully"
+
           find service/server/router/web -maxdepth 2 -type f | head -20
 
-      - name: Fix and verify XP dependencies
+      # --------------------------------------------------
+      # 7. 强制修复 xdg XP 兼容性
+      # --------------------------------------------------
+      - name: Force XP compatible xdg version
         working-directory: v2rayA/service
         shell: bash
         run: |
           set -eux
 
-          # 将 xdg 降级到 XP 兼容版本
+          echo "===== Original dependency ====="
+          grep -n "adrg/xdg" go.mod || true
+
+          # 清除可能存在的旧替换规则
+          go mod edit \
+            -dropreplace=github.com/adrg/xdg
+
+          # 强制替换为 v0.3.4
           go mod edit \
             -replace=github.com/adrg/xdg=github.com/adrg/xdg@v0.3.4
 
-          # 重新整理依赖关系，生成完整 go.sum
+          echo "===== Updated go.mod ====="
+          grep -n "adrg/xdg" go.mod
+
+          # 更新依赖关系和 go.sum
           go mod tidy
 
-          # 下载依赖
+          # 下载并验证依赖
           go mod download
-
-          # 验证依赖完整性
           go mod verify
 
-          # 确认实际使用的版本
-          go list -m -json github.com/adrg/xdg
+          echo "===== Verify selected xdg version ====="
+
+          XDG_VERSION="$(go list -m -f '{{if .Replace}}{{.Replace.Version}}{{else}}{{.Version}}{{end}}' github.com/adrg/xdg)"
+
+          echo "Selected xdg version: ${XDG_VERSION}"
+
+          if [ "$XDG_VERSION" != "v0.3.4" ]; then
+            echo "ERROR: xdg was not replaced with v0.3.4"
+            exit 1
+          fi
+
+          echo "===== Verify actual xdg source directory ====="
+
+          XDG_DIR="$(go list -f '{{.Dir}}' github.com/adrg/xdg)"
+
+          echo "xdg source: ${XDG_DIR}"
+
+          case "$XDG_DIR" in
+            *"xdg@v0.3.4"*)
+              echo "XP compatible xdg source confirmed"
+              ;;
+            *)
+              echo "ERROR: unexpected xdg source directory"
+              exit 1
+              ;;
+          esac
+
+          echo "===== Dependency verification passed ====="
+
+      # --------------------------------------------------
+      # 8. 编译 Windows XP 32 位程序
+      # --------------------------------------------------
       - name: Build v2rayA
         working-directory: v2rayA/service
         shell: bash
         run: |
           set -eux
 
+          rm -rf ../dist
           mkdir -p ../dist
 
           export GOOS=windows
           export GOARCH=386
           export CGO_ENABLED=0
 
+          echo "===== Build environment ====="
+          go version
+          go env GOOS GOARCH CGO_ENABLED GOROOT
+
+          # 只读模式，避免编译时依赖版本发生变化
           go build \
-            -mod=mod \
+            -mod=readonly \
             -trimpath \
             -tags "netgo osusergo" \
             -ldflags "-s -w" \
             -o ../dist/v2raya.exe \
             .
+
+          test -s ../dist/v2raya.exe
+
+          echo "Build completed successfully"
+
+      # --------------------------------------------------
+      # 9. 检查生成的 EXE
+      # --------------------------------------------------
       - name: Verify executable
+        shell: bash
         run: |
+          set -eux
+
           file v2rayA/dist/v2raya.exe
           ls -lh v2rayA/dist/v2raya.exe
 
-      - name: Package release
+      # --------------------------------------------------
+      # 10. 生成说明文件
+      # --------------------------------------------------
+      - name: Prepare README
+        shell: bash
         run: |
-          cd v2rayA/dist
+          set -eux
 
-          cat > README.txt <<'EOF'
+          cat > v2rayA/dist/README.txt <<'EOF'
           v2rayA Windows XP x86 build
 
           Version: v2.2.7.5
@@ -155,26 +240,42 @@ jobs:
           Go: BieHDC/go-backports Go 1.21 NT5.1
           CGO: disabled
 
-          Run:
-          v2raya.exe --lite --v2ray-bin v2ray.exe
+          The V2Ray core is not included.
+          You must provide a compatible external v2ray.exe.
 
-          Open:
+          Web interface:
           http://127.0.0.1:2017
 
-          The V2Ray core is not included.
+          Note:
+          This is an experimental Windows XP compatibility build.
           EOF
 
-
+      # --------------------------------------------------
+      # 11. 准备上传文件
+      # --------------------------------------------------
       - name: Prepare release files
+        shell: bash
         run: |
+          set -eux
+
+          rm -rf release
           mkdir -p release
+
           cp v2rayA/dist/v2raya.exe release/
           cp v2rayA/dist/README.txt release/
 
+          echo "===== Release files ====="
+          ls -lh release/
+
+          test "$(find release -maxdepth 1 -type f | wc -l)" -eq 2
+
+      # --------------------------------------------------
+      # 12. 上传 Artifact
+      # --------------------------------------------------
       - name: Upload XP build
         uses: actions/upload-artifact@v4
         with:
           name: v2raya-xp-x86
           path: release/*
           if-no-files-found: error
-
+          compression-level: 0
