@@ -1,0 +1,192 @@
+
+name: Build NekoRay 3.26 for Windows XP x86
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - xp
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build XP x86 GUI
+    runs-on: [self-hosted, windows, nekoray-xp]
+
+    env:
+      QT_ROOT: ${{ vars.QT_ROOT }}
+
+    steps:
+      # 1. 获取源码
+      - name: Checkout NekoRay
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      # 2. 检查编译环境
+      - name: Check build environment
+        shell: cmd
+        run: |
+          if not defined QT_ROOT (
+            echo ERROR: QT_ROOT is not configured
+            exit /b 1
+          )
+
+          if not exist "%QT_ROOT%\bin\qmake.exe" (
+            echo ERROR: Qt qmake not found
+            exit /b 1
+          )
+
+          if not exist "%QT_ROOT%\lib\cmake\Qt5\Qt5Config.cmake" (
+            echo ERROR: Qt5Config.cmake not found
+            exit /b 1
+          )
+
+          cmake --version
+
+          "%QT_ROOT%\bin\qmake.exe" -query QT_VERSION
+
+      # 3. 修改 Windows XP API 目标版本
+      - name: Apply Windows XP compatibility
+        shell: pwsh
+        run: |
+          $path = Join-Path $env:GITHUB_WORKSPACE `
+            "cmake/windows/windows.cmake"
+
+          if (!(Test-Path $path)) {
+            throw "windows.cmake not found"
+          }
+
+          $source = [IO.File]::ReadAllText($path)
+
+          $old = "-D_WIN32_WINNT=0x600"
+          $new = "-DWINVER=0x0501 -D_WIN32_WINNT=0x0501"
+
+          if (!$source.Contains($old)) {
+            throw "Original Windows API definition not found"
+          }
+
+          $source = $source.Replace($old, $new)
+
+          [IO.File]::WriteAllText(
+            $path,
+            $source,
+            (New-Object System.Text.UTF8Encoding($false))
+          )
+
+          Write-Host "Windows XP compatibility applied"
+
+      # 4. 初始化 VS2017 XP 编译环境
+      - name: Initialize MSVC 2017
+        shell: cmd
+        run: |
+          set "VSROOT=C:\Program Files (x86)\Microsoft Visual Studio\2017\Community"
+
+          if not exist "%VSROOT%\VC\Auxiliary\Build\vcvarsall.bat" (
+            set "VSROOT=C:\Program Files (x86)\Microsoft Visual Studio\2017\BuildTools"
+          )
+
+          if not exist "%VSROOT%\VC\Auxiliary\Build\vcvarsall.bat" (
+            echo ERROR: VS2017 not found
+            exit /b 1
+          )
+
+          call "%VSROOT%\VC\Auxiliary\Build\vcvarsall.bat" x86
+
+          if errorlevel 1 exit /b 1
+
+          where cl
+          where link
+          where cmake
+
+      # 5. CMake 配置
+      - name: Configure NekoRay
+        shell: cmd
+        run: |
+          set "VSROOT=C:\Program Files (x86)\Microsoft Visual Studio\2017\Community"
+
+          if not exist "%VSROOT%\VC\Auxiliary\Build\vcvarsall.bat" (
+            set "VSROOT=C:\Program Files (x86)\Microsoft Visual Studio\2017\BuildTools"
+          )
+
+          call "%VSROOT%\VC\Auxiliary\Build\vcvarsall.bat" x86
+
+          if errorlevel 1 exit /b 1
+
+          set "PATH=%QT_ROOT%\bin;%PATH%"
+
+          cmake -S . -B build-xp ^
+            -G "Visual Studio 15 2017" ^
+            -A Win32 ^
+            -T v141_xp ^
+            -DCMAKE_PREFIX_PATH="%QT_ROOT%" ^
+            -DQT_VERSION_MAJOR=5 ^
+            -DNKR_NO_EXTERNAL=ON ^
+            -DCMAKE_CXX_FLAGS="/DWINVER=0x0501" ^
+            -DCMAKE_EXE_LINKER_FLAGS="/SUBSYSTEM:WINDOWS,5.01"
+
+          if errorlevel 1 exit /b 1
+
+      # 6. 编译 GUI
+      - name: Build NekoRay
+        shell: cmd
+        run: |
+          set "VSROOT=C:\Program Files (x86)\Microsoft Visual Studio\2017\Community"
+
+          if not exist "%VSROOT%\VC\Auxiliary\Build\vcvarsall.bat" (
+            set "VSROOT=C:\Program Files (x86)\Microsoft Visual Studio\2017\BuildTools"
+          )
+
+          call "%VSROOT%\VC\Auxiliary\Build\vcvarsall.bat" x86
+
+          if errorlevel 1 exit /b 1
+
+          cmake --build build-xp ^
+            --config Release ^
+            --parallel 2
+
+          if errorlevel 1 exit /b 1
+
+      # 7. 整理 GUI 文件
+      - name: Package NekoRay GUI
+        shell: cmd
+        run: |
+          if not exist build-xp\Release\nekoray.exe (
+            echo ERROR: nekoray.exe not found
+            exit /b 1
+          )
+
+          if exist dist rmdir /s /q dist
+
+          mkdir dist
+
+          copy build-xp\Release\nekoray.exe dist\
+
+          set "PATH=%QT_ROOT%\bin;%PATH%"
+
+          if exist "%QT_ROOT%\bin\windeployqt.exe" (
+            "%QT_ROOT%\bin\windeployqt.exe" ^
+              --release ^
+              --compiler-runtime ^
+              dist\nekoray.exe
+
+            if errorlevel 1 exit /b 1
+          ) else (
+            echo ERROR: windeployqt.exe not found
+            exit /b 1
+          )
+
+          echo GUI package completed
+
+      # 8. 上传编译产物
+      - name: Upload XP GUI
+        uses: actions/upload-artifact@v4
+        with:
+          name: NekoRay-3.26-Windows-XP-x86
+          path: dist/
+          if-no-files-found: error
+          compression-level: 9
+          retention-days: 30
