@@ -20,7 +20,8 @@ env:
   BOOTSTRAP_GO_VERSION: "1.21.13"
 
 jobs:
-  build_xray_for_xp:
+  build:
+    name: build xray_${{ inputs.source_ref }}_xp_386
     runs-on: ubuntu-latest
 
     steps:
