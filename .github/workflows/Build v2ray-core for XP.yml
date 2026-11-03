@@ -2,323 +2,205 @@
 name: Build v2ray-core for XP
 run-name: v2ray-core_${{ inputs.v2ray_version }}_for_xp
 
-on:
-  workflow_dispatch:
-    inputs:
-      v2ray_version:
-        description: 'V2Ray version (e.g. 5.20.0)'
-        required: false
-        default: '5.18.0'
-        type: string
 
-  push:
-    tags:
-      - 'v*'
+on:
+workflow_dispatch:
+inputs:
+v2ray_version:
+description: 'V2Ray version (e.g. 5.18.0)'
+required: false
+default: '5.18.0'
+type: string
+
+push:
+tags:
+- 'v*'
 
 # ==========================================================
-# 全局版本变量
+# 全局版本变量：通常只需要修改这里
 # ==========================================================
 env:
-  V2RAY_VERSION: '5.18.0'
-  GO_VERSION: '1.21.13'
-  SOURCE_PREFIX: 'v2ray-core_'
-  GO_BACKPORTS_REPO: 'BieHDC/go-backports'
-  GO_BACKPORTS_REF: 'release-branch.go1.21-nt51'
-
-  # 禁止 Go 自动下载或切换工具链
-  GOTOOLCHAIN: local
-
-  # 禁止意外使用 go.work
-  GOWORK: off
+V2RAY_VERSION: '5.18.0'
+GO_VERSION: '1.21.13'
+SOURCE_PREFIX: 'v2ray-core_'
+GO_BACKPORTS_REPO: 'BieHDC/go-backports'
+GO_BACKPORTS_REF: 'release-branch.go1.21-nt51'
 
 permissions:
-  contents: write
+contents: write
 
 jobs:
-  build:
-    name: build v2ray-core_${{ inputs.v2ray_version }}_for_xp
-    runs-on: ubuntu-latest
+build:
+name: build v2ray-core_${{ inputs.v2ray_version }}_for_xp
+runs-on: ubuntu-latest
 
-    steps:
+steps:
+# ------------------------------------------------------
+# 1. Checkout 主仓库
+# ------------------------------------------------------
+- name: Checkout this repository
+uses: actions/checkout@v4
+with:
+fetch-depth: 0
 
-      # ------------------------------------------------------
-      # 1. Checkout 主仓库
-      # ------------------------------------------------------
-      - name: Checkout this repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+# ------------------------------------------------------
+# 2. 确定实际编译版本
+# ------------------------------------------------------
+- name: Determine version
+id: version
+shell: bash
+run: |
+         VERSION="${{ inputs.v2ray_version }}"
 
-      # ------------------------------------------------------
-      # 2. 确定实际编译版本
-      # ------------------------------------------------------
-      - name: Determine version
-        id: version
-        shell: bash
-        run: |
-          VERSION="${{ inputs.v2ray_version }}"
+         # Tag 触发时，优先使用 Tag 中的版本号
+         if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+           VERSION="${GITHUB_REF#refs/tags/v}"
+         fi
 
-          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
-            VERSION="${GITHUB_REF#refs/tags/v}"
-          fi
+         # 手动触发未填写时使用默认版本
+         if [[ -z "$VERSION" ]]; then
+           VERSION="${V2RAY_VERSION}"
+         fi
 
-          if [[ -z "$VERSION" ]]; then
-            VERSION="${V2RAY_VERSION}"
-          fi
+         echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+         echo "V2Ray version: $VERSION"
 
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "V2Ray version: $VERSION"
+     # ------------------------------------------------------
+# 3. Checkout XP Go 源码
+# ------------------------------------------------------
+- name: Checkout go-backports
+uses: actions/checkout@v4
+with:
+repository: ${{ env.GO_BACKPORTS_REPO }}
+ref: ${{ env.GO_BACKPORTS_REF }}
+path: go-backports
 
-      # ------------------------------------------------------
-      # 3. Checkout XP Go 源码
-      # ------------------------------------------------------
-      - name: Checkout go-backports
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ env.GO_BACKPORTS_REPO }}
-          ref: ${{ env.GO_BACKPORTS_REF }}
-          path: go-backports
+# ------------------------------------------------------
+# 4. 安装 Bootstrap Go
+# ------------------------------------------------------
+- name: Setup bootstrap Go
+uses: actions/setup-go@v5
+with:
+go-version: ${{ env.GO_VERSION }}
+cache: false
 
-      # ------------------------------------------------------
-      # 4. 安装 Bootstrap Go 1.21
-      # ------------------------------------------------------
-      - name: Setup bootstrap Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: ${{ env.GO_VERSION }}
-          cache: false
+# ------------------------------------------------------
+# 5. 编译 XP 兼容 Go 工具链
+# ------------------------------------------------------
+- name: Build XP-compatible Go toolchain
+working-directory: go-backports/src
+shell: bash
+run: |
+         export CGO_ENABLED=0
+         ./make.bash
 
-      # ------------------------------------------------------
-      # 5. 编译 XP 兼容 Go 工具链
-      # ------------------------------------------------------
-      - name: Build XP-compatible Go toolchain
-        working-directory: go-backports/src
-        shell: bash
-        run: |
-          export CGO_ENABLED=0
+     # ------------------------------------------------------
+# 6. 切换到 XP Go
+# ------------------------------------------------------
+- name: Add XP Go to PATH
+shell: bash
+run: |
+         echo "$GITHUB_WORKSPACE/go-backports/bin" >> "$GITHUB_PATH"
+         "$GITHUB_WORKSPACE/go-backports/bin/go" version
 
-          echo "Bootstrap Go:"
-          go version
+     # ------------------------------------------------------
+# 7. 确定 V2Ray 源码目录
+# ------------------------------------------------------
+- name: Determine v2ray source path
+id: src
+shell: bash
+env:
+VERSION: ${{ steps.version.outputs.version }}
+run: |
+         SRC="${SOURCE_PREFIX}${VERSION}"
 
-          ./make.bash
+         if [ -d "$SRC" ]; then
+           echo "path=$SRC" >> "$GITHUB_OUTPUT"
+         elif [ -d "v2ray" ]; then
+           echo "path=v2ray" >> "$GITHUB_OUTPUT"
+         else
+           echo "找不到 V2Ray 源码目录：$SRC"
+           echo "当前仓库目录："
+           ls -la
+           exit 1
+         fi
 
-          echo "XP Go build completed."
+     # ------------------------------------------------------
+# 8. 下载 Go 模块
+# ------------------------------------------------------
+- name: Download modules
+working-directory: ${{ steps.src.outputs.path }}
+run: |
+         go mod download
 
-      # ------------------------------------------------------
-      # 6. 强制切换 XP Go 1.21
-      # ------------------------------------------------------
-      - name: Force XP Go 1.21
-        shell: bash
-        run: |
-          XP_GOROOT="$GITHUB_WORKSPACE/go-backports"
-          XP_GO="$XP_GOROOT/bin/go"
+     # ------------------------------------------------------
+# 9. 编译 Windows XP 32 位版本
+# ------------------------------------------------------
+- name: Build for Windows XP (386)
+working-directory: ${{ steps.src.outputs.path }}
+env:
+CGO_ENABLED: 0
+GOOS: windows
+GOARCH: 386
+shell: bash
+run: |
+         echo "Building V2Ray ${{ steps.version.outputs.version }}"
 
-          if [ ! -x "$XP_GO" ]; then
-            echo "XP Go compiler not found!"
-            exit 1
-          fi
+         go build \
+           -o v2ray.exe \
+           -trimpath \
+           -ldflags "-s -w -buildid=" \
+           ./main
 
-          echo "GOROOT=$XP_GOROOT" >> "$GITHUB_ENV"
-          echo "XP_GO=$XP_GO" >> "$GITHUB_ENV"
-          echo "$XP_GOROOT/bin" >> "$GITHUB_PATH"
+         go build \
+           -o v2ctl.exe \
+           -trimpath \
+           -ldflags "-s -w -buildid=" \
+           -tags confonly \
+           ./infra/control/main || true
 
-          echo "GOROOT=$XP_GOROOT" >> "$GITHUB_ENV"
-          echo "GOTOOLCHAIN=local" >> "$GITHUB_ENV"
+     # ------------------------------------------------------
+# 10. 整理编译结果
+# ------------------------------------------------------
+- name: Prepare output
+shell: bash
+env:
+VERSION: ${{ steps.version.outputs.version }}
+SRC: ${{ steps.src.outputs.path }}
+run: |
+         mkdir -p dist
 
-          echo "===== XP Go version ====="
-          "$XP_GO" version
+         cp "$SRC/v2ray.exe" dist/
 
-          echo "===== XP Go environment ====="
-          GOROOT="$XP_GOROOT" "$XP_GO" env GOROOT GOTOOLCHAIN GOOS GOARCH
+         if [ -f "$SRC/v2ctl.exe" ]; then
+           cp "$SRC/v2ctl.exe" dist/
+         fi
 
-          "$XP_GO" version | grep -q 'go1.21' || {
-            echo "ERROR: Not using Go 1.21!"
-            exit 1
-          }
+         cd dist
 
-      # ------------------------------------------------------
-      # 7. 确定 V2Ray 源码目录
-      # ------------------------------------------------------
-      - name: Determine v2ray source path
-        id: src
-        shell: bash
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          SRC="${SOURCE_PREFIX}${VERSION}"
+         zip -r "../v2ray_${VERSION}_xp_x86.zip" .
 
-          if [ -d "$SRC" ]; then
-            echo "path=$SRC" >> "$GITHUB_OUTPUT"
-          elif [ -d "v2ray" ]; then
-            echo "path=v2ray" >> "$GITHUB_OUTPUT"
-          else
-            echo "找不到 V2Ray 源码目录：$SRC"
-            ls -la
-            exit 1
-          fi
+     # ------------------------------------------------------
+# 11. 上传 Actions Artifact
+# ------------------------------------------------------
+- name: Upload artifact
+uses: actions/upload-artifact@v4
+with:
+name: v2ray_${{ steps.version.outputs.version }}_xp_x86
+path: |
+           dist/v2ray.exe
+           dist/v2ctl.exe
+         if-no-files-found: warn
+retention-days: 30
 
-          echo "Source directory: $SRC"
-
-      # ------------------------------------------------------
-      # 8. 检查并调整 Go 版本声明
-      # ------------------------------------------------------
-      - name: Adjust go.mod for Go 1.21
-        working-directory: ${{ steps.src.outputs.path }}
-        shell: bash
-        run: |
-          echo "===== Original go.mod ====="
-          head -n 10 go.mod
-
-          echo "===== Force Go 1.21 module declaration ====="
-
-          "$XP_GO" mod edit -go=1.21.0 -toolchain=none
-
-          echo "===== Modified go.mod ====="
-          head -n 10 go.mod
-
-          if grep -q '^toolchain ' go.mod; then
-            echo "ERROR: toolchain directive still exists!"
-            exit 1
-          fi
-
-          grep '^go ' go.mod
-
-      # ------------------------------------------------------
-      # 9. 下载 Go 模块
-      # ------------------------------------------------------
-      - name: Download modules
-        working-directory: ${{ steps.src.outputs.path }}
-        shell: bash
-        run: |
-          echo "Using:"
-          "$XP_GO" version
-
-          "$XP_GO" mod download
-
-          echo "Modules downloaded successfully."
-
-      # ------------------------------------------------------
-      # 10. 编译 Windows XP 32 位版本
-      # ------------------------------------------------------
-      - name: Build for Windows XP (386)
-        working-directory: ${{ steps.src.outputs.path }}
-        env:
-          CGO_ENABLED: 0
-          GOOS: windows
-          GOARCH: 386
-        shell: bash
-        run: |
-          echo "=================================="
-          echo "Building V2Ray ${{ steps.version.outputs.version }}"
-          echo "=================================="
-
-          echo "===== Compiler ====="
-          "$XP_GO" version
-
-          echo "===== Build environment ====="
-          "$XP_GO" env GOOS GOARCH CGO_ENABLED GOROOT GOTOOLCHAIN
-
-          # 再次确认编译器版本
-          "$XP_GO" version | grep -q 'go1.21' || exit 1
-
-          # 编译 V2Ray
-          "$XP_GO" build \
-            -v \
-            -o v2ray.exe \
-            -trimpath \
-            -ldflags="-s -w -buildid=" \
-            ./main
-
-          # 编译 v2ctl（仅当源码入口存在时）
-          if [ -d "./infra/control/main" ]; then
-            "$XP_GO" build \
-              -v \
-              -o v2ctl.exe \
-              -trimpath \
-              -ldflags="-s -w -buildid=" \
-              -tags confonly \
-              ./infra/control/main
-          else
-            echo "No v2ctl source directory; skipping."
-          fi
-
-          echo "V2Ray compilation completed."
-
-      # ------------------------------------------------------
-      # 11. 检查 EXE 文件格式
-      # ------------------------------------------------------
-      - name: Verify Windows executable
-        working-directory: ${{ steps.src.outputs.path }}
-        shell: bash
-        run: |
-          echo "===== File information ====="
-          file v2ray.exe
-
-          echo "===== PE architecture ====="
-          objdump -f v2ray.exe
-
-          echo "===== Go build information ====="
-          "$XP_GO" version -m v2ray.exe
-
-          # 必须是 32 位 Windows PE
-          file v2ray.exe | grep -q 'PE32 executable.*Intel 80386' || {
-            echo "ERROR: Invalid PE32 x86 executable!"
-            exit 1
-          }
-
-          # 检查 v2ctl（如果存在）
-          if [ -f v2ctl.exe ]; then
-            file v2ctl.exe
-            file v2ctl.exe | grep -q 'PE32 executable.*Intel 80386' || {
-              echo "ERROR: Invalid v2ctl PE format!"
-              exit 1
-            }
-          fi
-
-          echo "PE format verification passed."
-
-      # ------------------------------------------------------
-      # 12. 整理编译结果
-      # ------------------------------------------------------
-      - name: Prepare output
-        shell: bash
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
-          SRC: ${{ steps.src.outputs.path }}
-        run: |
-          mkdir -p dist
-
-          cp "$SRC/v2ray.exe" dist/
-
-          if [ -f "$SRC/v2ctl.exe" ]; then
-            cp "$SRC/v2ctl.exe" dist/
-          fi
-
-          cd dist
-
-          zip -r "../v2ray_${VERSION}_xp_x86.zip" .
-
-      # ------------------------------------------------------
-      # 13. 上传 Actions Artifact
-      # ------------------------------------------------------
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: v2ray_${{ steps.version.outputs.version }}_xp_x86
-          path: |
-            dist/v2ray.exe
-            dist/v2ctl.exe
-          if-no-files-found: warn
-          retention-days: 30
-
-      # ------------------------------------------------------
-      # 14. 创建 GitHub Release
-      # ------------------------------------------------------
-      - name: Create Release (when tagged)
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: v2ray_${{ steps.version.outputs.version }}_xp_x86.zip
-          generate_release_notes: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+# ------------------------------------------------------
+# 12. 创建 GitHub Release
+# ------------------------------------------------------
+- name: Create Release (when tagged)
+if: startsWith(github.ref, 'refs/tags/')
+uses: softprops/action-gh-release@v2
+with:
+files: v2ray_${{ steps.version.outputs.version }}_xp_x86.zip
+generate_release_notes: true
+env:
+GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
