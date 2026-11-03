@@ -1,0 +1,233 @@
+
+name: Build WinXray for XP
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - '**/*.aardio'
+      - '**/*.aproj'
+      - '.github/workflows/build-winxray.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      # 1. 获取 WinXray 源码
+      - name: Checkout WinXray
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      # 2. 下载 aardio IDE
+      - name: Download aardio
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $url = "https://d.aardio.com/ide/aardio.7z"
+          $archive = "$env:RUNNER_TEMP\aardio.7z"
+          $install = "$env:RUNNER_TEMP\aardio"
+
+          Invoke-WebRequest -Uri $url -OutFile $archive
+
+          if (!(Test-Path $archive)) {
+              throw "aardio download failed"
+          }
+
+          $sevenZip = "C:\Program Files\7-Zip\7z.exe"
+
+          if (!(Test-Path $sevenZip)) {
+              throw "7-Zip not found"
+          }
+
+          & $sevenZip x $archive "-o$install" -y
+
+          if ($LASTEXITCODE -ne 0) {
+              throw "aardio extraction failed"
+          }
+
+          $ide = Get-ChildItem $install -Filter "aardio.exe" -Recurse |
+              Select-Object -First 1
+
+          if (!$ide) {
+              throw "aardio.exe not found"
+          }
+
+          "AARDIO_EXE=$($ide.FullName)" |
+              Out-File $env:GITHUB_ENV -Append
+
+          Write-Host "aardio: $($ide.FullName)"
+
+      # 3. 检查工程
+      - name: Check project
+        shell: pwsh
+        run: |
+          if (!(Test-Path "$env:GITHUB_WORKSPACE\default.aproj")) {
+              throw "default.aproj not found"
+          }
+
+          if (!(Test-Path "$env:GITHUB_WORKSPACE\main.aardio")) {
+              throw "main.aardio not found"
+          }
+
+      # 4. 启动 IDE 并发布工程
+      - name: Publish WinXray
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $project = "$env:GITHUB_WORKSPACE\default.aproj"
+
+          # 记录编译前的 EXE
+          $before = @{}
+
+          Get-ChildItem $env:GITHUB_WORKSPACE `
+              -Filter "*.exe" -Recurse -File |
+              Where-Object {
+                  $_.FullName -notmatch '\\.git\\'
+              } |
+              ForEach-Object {
+                  $before[$_.FullName] = $_.LastWriteTimeUtc
+              }
+
+          # 启动 aardio IDE 并打开工程
+          $ideProcess = Start-Process `
+              -FilePath $env:AARDIO_EXE `
+              -ArgumentList "`"$project`"" `
+              -PassThru
+
+          # 等待 IDE 主窗口
+          $hwnd = [IntPtr]::Zero
+
+          for ($i = 0; $i -lt 60; $i++) {
+              Start-Sleep -Seconds 2
+              $ideProcess.Refresh()
+
+              if ($ideProcess.HasExited) {
+                  throw "aardio IDE exited unexpectedly"
+              }
+
+              if ($ideProcess.MainWindowHandle -ne 0) {
+                  $hwnd = $ideProcess.MainWindowHandle
+                  break
+              }
+          }
+
+          if ($hwnd -eq [IntPtr]::Zero) {
+              throw "aardio IDE main window not found"
+          }
+
+          # 通过 IDE 发布命令 ID 触发编译
+          Add-Type @'
+          using System;
+          using System.Runtime.InteropServices;
+
+          public class AardioBuild {
+              [DllImport("user32.dll", SetLastError=true)]
+              public static extern IntPtr SendMessageTimeout(
+                  IntPtr hWnd,
+                  uint Msg,
+                  IntPtr wParam,
+                  IntPtr lParam,
+                  uint flags,
+                  uint timeout,
+                  out IntPtr result
+              );
+          }
+          '@
+
+          $result = [IntPtr]::Zero
+
+          # WM_COMMAND = 0x0111
+          # _IDE_ID_BUILD_PUBLISH = 0x8317
+          $ret = [AardioBuild]::SendMessageTimeout(
+              $hwnd,
+              0x0111,
+              [IntPtr]0x8317,
+              [IntPtr]::Zero,
+              0x0002,
+              300000,
+              [ref]$result
+          )
+
+          if ($ret -eq [IntPtr]::Zero) {
+              throw "Failed to send aardio publish command"
+          }
+
+          # 等待生成新的 EXE
+          $outputExe = $null
+
+          for ($i = 0; $i -lt 90; $i++) {
+              Start-Sleep -Seconds 2
+
+              $candidates = Get-ChildItem `
+                  $env:GITHUB_WORKSPACE `
+                  -Filter "*.exe" -Recurse -File |
+                  Where-Object {
+                      $_.FullName -notmatch '\\.git\\' -and
+                      (
+                          !$before.ContainsKey($_.FullName) -or
+                          $_.LastWriteTimeUtc -gt
+                              $before[$_.FullName]
+                      )
+                  } |
+                  Sort-Object LastWriteTimeUtc -Descending
+
+              if ($candidates) {
+                  $outputExe = $candidates[0]
+                  break
+              }
+          }
+
+          if (!$outputExe) {
+              throw "WinXray publish output not found"
+          }
+
+          Write-Host "Published EXE: $($outputExe.FullName)"
+
+          "WINXRAY_EXE=$($outputExe.FullName)" |
+              Out-File $env:GITHUB_ENV -Append
+
+      # 5. 打包发布文件
+      - name: Package WinXray
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $release = "$env:GITHUB_WORKSPACE\release"
+          New-Item -ItemType Directory -Force $release | Out-Null
+
+          Copy-Item $env:WINXRAY_EXE "$release\WinXray.exe"
+
+          # 保留原工程中外部核心及资源目录
+          if (Test-Path "$env:GITHUB_WORKSPACE\xray-core") {
+              Copy-Item "$env:GITHUB_WORKSPACE\xray-core" `
+                  "$release\xray-core" -Recurse
+          }
+
+          Compress-Archive `
+              -Path "$release\*" `
+              -DestinationPath "$env:GITHUB_WORKSPACE\WinXray-XP.zip" `
+              -Force
+
+          Get-Item "$release\WinXray.exe" |
+              Format-List Name, Length, LastWriteTime
+
+      # 6. 上传 EXE
+      - name: Upload WinXray EXE
+        uses: actions/upload-artifact@v4
+        with:
+          name: WinXray-XP
+          path: |
+            WinXray-XP.zip
+            release/WinXray.exe
+          if-no-files-found: error
+          retention-days: 30
