@@ -92,8 +92,7 @@ jobs:
           go mod download
 
           WG_DIR=$(go list -m -f '{{.Dir}}' golang.zx2c4.com/wireguard)
-
-         echo "WireGuard directory: $WG_DIR"
+          echo "WireGuard directory: $WG_DIR"
 
           echo "===== uapi_windows.go ====="
           nl -ba "$WG_DIR/ipc/uapi_windows.go" | sed -n '35,75p'
