@@ -1,0 +1,114 @@
+
+name: Build sing-box for XP
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: "sing-box 源码版本或分支"
+        required: true
+        default: "v1.10.7"
+
+permissions:
+  contents: read
+
+env:
+  SING_BOX_REPO: SagerNet/sing-box
+  SING_BOX_REF: ${{ inputs.source_ref }}
+  GO_BACKPORTS_REPO: BieHDC/go-backports
+  GO_BACKPORTS_REF: release-branch.go1.21-nt51
+  BOOTSTRAP_GO_VERSION: "1.21.13"
+
+jobs:
+  build_sinbox_for_xp:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. 获取 sing-box 源码
+      - name: Checkout sing-box
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.SING_BOX_REPO }}
+          ref: ${{ env.SING_BOX_REF }}
+          path: sing-box-src
+          fetch-depth: 1
+
+      # 2. 安装标准 Go，仅用于引导 XP 版 Go
+      - name: Setup bootstrap Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.BOOTSTRAP_GO_VERSION }}
+          check-latest: false
+
+      # 3. 获取 Go 1.21 XP backports 源码
+      - name: Checkout Go backports
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.GO_BACKPORTS_REPO }}
+          ref: ${{ env.GO_BACKPORTS_REF }}
+          path: go-backports
+          fetch-depth: 1
+
+      # 4. 编译 Linux 主机使用的 Go 1.21 工具链
+      - name: Build XP backports Go toolchain
+        shell: bash
+        run: |
+          set -eux
+
+          export GOROOT_BOOTSTRAP="$(go env GOROOT)"
+          export CGO_ENABLED=0
+
+          cd go-backports/src
+          ./make.bash
+
+          cd "$GITHUB_WORKSPACE"
+
+          export GOROOT="$GITHUB_WORKSPACE/go-backports"
+          export PATH="$GOROOT/bin:$PATH"
+
+          go version
+          go env GOROOT
+
+      # 5. 使用 XP backports Go 编译 sing-box
+      - name: Build sing-box Windows XP 32-bit
+        shell: bash
+        run: |
+          set -eux
+
+          export GOROOT="$GITHUB_WORKSPACE/go-backports"
+          export PATH="$GOROOT/bin:$PATH"
+
+          export GOTOOLCHAIN=local
+          export GOOS=windows
+          export GOARCH=386
+          export CGO_ENABLED=0
+
+          cd sing-box-src
+
+          echo "===== Go version ====="
+          go version
+
+          echo "===== sing-box version ====="
+          git describe --tags --always
+
+          echo "===== Go module ====="
+          head -n 5 go.mod
+
+          # 先采用相对精简的功能组合，减少旧系统兼容性问题
+          go build -v \
+            -trimpath \
+            -tags "with_clash_api,with_quic,with_utls,with_wireguard,with_reality_server" \
+            -ldflags "-s -w -buildid=" \
+            -o "$GITHUB_WORKSPACE/sing-box.exe" \
+            ./cmd/sing-box
+
+          file "$GITHUB_WORKSPACE/sing-box.exe"
+          ls -lh "$GITHUB_WORKSPACE/sing-box.exe"
+
+      # 6. 上传编译结果
+      - name: Upload sing-box
+        uses: actions/upload-artifact@v4
+        with:
+          name: sing-box-${{ inputs.source_ref }}-windows-386-xp
+          path: sing-box.exe
+          if-no-files-found: error
