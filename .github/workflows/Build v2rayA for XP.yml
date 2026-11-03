@@ -23,14 +23,18 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
+      # --------------------------------------------------
       # 1. 安装 Bootstrap Go
+      # --------------------------------------------------
       - name: Install bootstrap Go
         uses: actions/setup-go@v5
         with:
           go-version: "1.21.13"
           cache: false
 
+      # --------------------------------------------------
       # 2. 下载 XP 兼容 Go 源码
+      # --------------------------------------------------
       - name: Checkout Go XP source
         shell: bash
         run: |
@@ -41,7 +45,9 @@ jobs:
             https://github.com/BieHDC/go-backports.git \
             go-backports
 
+      # --------------------------------------------------
       # 3. 编译 Go XP 工具链
+      # --------------------------------------------------
       - name: Build Go XP cross compiler
         shell: bash
         run: |
@@ -62,7 +68,9 @@ jobs:
           echo "GOROOT=$GITHUB_WORKSPACE/go-backports" >> "$GITHUB_ENV"
           echo "$GITHUB_WORKSPACE/go-backports/bin" >> "$GITHUB_PATH"
 
+      # --------------------------------------------------
       # 4. 检查 Go 工具链
+      # --------------------------------------------------
       - name: Verify XP Go toolchain
         shell: bash
         run: |
@@ -72,7 +80,9 @@ jobs:
           go env GOROOT
           go env GOHOSTOS GOHOSTARCH
 
+      # --------------------------------------------------
       # 5. 下载 v2rayA 源码
+      # --------------------------------------------------
       - name: Checkout v2rayA
         shell: bash
         run: |
@@ -83,7 +93,9 @@ jobs:
             https://github.com/v2rayA/v2rayA.git \
             v2rayA
 
+      # --------------------------------------------------
       # 6. 下载 Web 前端
+      # --------------------------------------------------
       - name: Download and prepare Web frontend
         shell: bash
         run: |
@@ -108,8 +120,10 @@ jobs:
 
           echo "Web frontend prepared successfully"
 
-      # 7. 下载真正的 xdg v0.3.4 源码
-      - name: Checkout XP compatible xdg
+      # --------------------------------------------------
+      # 7. 下载 xdg v0.3.4 源码
+      # --------------------------------------------------
+      - name: Download XP compatible xdg
         shell: bash
         run: |
           set -eux
@@ -119,70 +133,98 @@ jobs:
             https://github.com/adrg/xdg.git \
             xdg-compat
 
-          echo "===== xdg source version ====="
+          echo "===== xdg version ====="
           git -C xdg-compat describe --tags --exact-match
-
-          echo "===== Check old source ====="
-
-          # v0.3.4 不应包含新版 KnownFolderPath 调用
-          if grep -R -n "KnownFolderPath" xdg-compat \
-            --include="*.go"; then
-            echo "ERROR: incompatible KnownFolderPath found"
-            exit 1
-          fi
 
           test -f xdg-compat/go.mod
 
-      # 8. 强制使用本地 xdg v0.3.4
-      - name: Fix XP dependencies
+          echo "===== Check incompatible Windows API ====="
+
+          if grep -R -n \
+            -E 'KnownFolderPath|SHGetKnownFolderPath' \
+            xdg-compat \
+            --include='*.go'; then
+
+            echo "ERROR: XP incompatible API found in xdg source"
+            exit 1
+          fi
+
+          echo "xdg v0.3.4 source verified"
+
+      # --------------------------------------------------
+      # 8. 强制替换 xdg 模块
+      # --------------------------------------------------
+      - name: Force local xdg replacement
         working-directory: v2rayA/service
         shell: bash
         run: |
           set -eux
 
-          echo "===== Original xdg dependency ====="
+          echo "===== Go environment ====="
+          go version
+          go env GOROOT
+
+          echo "===== Original dependency ====="
           grep -n "adrg/xdg" go.mod || true
 
           # 删除之前可能存在的替换规则
           go mod edit \
             -dropreplace=github.com/adrg/xdg
 
-          # 使用本地源码替换，不再依赖远程版本选择
+          # 强制使用仓库中的本地源码
           go mod edit \
             -replace=github.com/adrg/xdg=$GITHUB_WORKSPACE/xdg-compat
 
-          echo "===== Current replacement ====="
+          echo "===== Current go.mod replacement ====="
           grep -n "adrg/xdg" go.mod
 
-          # 更新依赖及校验文件
+          # 更新依赖关系和 go.sum
           go mod tidy
 
           go mod download
           go mod verify
 
-          # 检查实际生效的本地目录
-          XDG_DIR="$(go list -m -f '{{.Replace.Dir}}' github.com/adrg/xdg)"
+          echo "===== Verify module replacement ====="
 
-          echo "Actual xdg directory: $XDG_DIR"
+          REPLACE_DIR="$(go list -m -f '{{if .Replace}}{{.Replace.Dir}}{{end}}' github.com/adrg/xdg)"
 
-          if [ "$XDG_DIR" != "$GITHUB_WORKSPACE/xdg-compat" ]; then
-            echo "ERROR: local xdg replacement did not take effect"
+          echo "Replace directory: $REPLACE_DIR"
+
+          if [ "$REPLACE_DIR" != "$GITHUB_WORKSPACE/xdg-compat" ]; then
+            echo "ERROR: xdg replacement failed"
             exit 1
           fi
 
-          # 检查 xdg 包实际编译目录
-          PACKAGE_DIR="$(go list -f '{{.Dir}}' github.com/adrg/xdg)"
+          echo "===== Verify actual package source ====="
 
-          echo "Actual package directory: $PACKAGE_DIR"
+          XDG_DIR="$(go list -f '{{.Dir}}' github.com/adrg/xdg)"
 
-          if [ "$PACKAGE_DIR" != "$GITHUB_WORKSPACE/xdg-compat" ]; then
+          echo "Package directory: $XDG_DIR"
+
+          if [ "$XDG_DIR" != "$GITHUB_WORKSPACE/xdg-compat" ]; then
             echo "ERROR: unexpected xdg package directory"
             exit 1
           fi
 
-          echo "XP xdg replacement verified successfully"
+          echo "===== Verify Windows source files ====="
 
+          find "$XDG_DIR" -maxdepth 2 \
+            -type f -name '*windows*.go' -print
+
+          if grep -R -n \
+            -E 'KnownFolderPath|SHGetKnownFolderPath' \
+            "$XDG_DIR" \
+            --include='*.go'; then
+
+            echo "ERROR: incompatible API still exists"
+            exit 1
+          fi
+
+          echo "XP xdg replacement verified"
+
+      # --------------------------------------------------
       # 9. 编译 Windows XP 32 位程序
+      # --------------------------------------------------
       - name: Build v2rayA
         working-directory: v2rayA/service
         shell: bash
@@ -197,6 +239,7 @@ jobs:
           export CGO_ENABLED=0
 
           echo "===== Build environment ====="
+
           go version
           go env GOOS GOARCH CGO_ENABLED GOROOT
 
@@ -210,9 +253,11 @@ jobs:
 
           test -s ../dist/v2raya.exe
 
-          echo "Build completed"
+          echo "Build completed successfully"
 
-      # 10. 检查 EXE 内嵌依赖信息
+      # --------------------------------------------------
+      # 10. 检查最终 EXE 的依赖信息
+      # --------------------------------------------------
       - name: Verify executable dependencies
         shell: bash
         run: |
@@ -222,26 +267,28 @@ jobs:
 
           test -s "$EXE"
 
-          echo "===== EXE file information ====="
+          echo "===== EXE information ====="
+
           file "$EXE"
           ls -lh "$EXE"
           sha256sum "$EXE"
 
           echo "===== Go build information ====="
 
-          go version -m "$EXE" | tee /tmp/v2raya-build-info.txt
+          go version -m "$EXE" | tee build-info.txt
 
-          echo "===== Verify local xdg replacement in EXE ====="
+          echo "===== Verify xdg replacement in EXE ====="
 
-          if ! grep -F "$GITHUB_WORKSPACE/xdg-compat" \
-            /tmp/v2raya-build-info.txt; then
-            echo "ERROR: EXE does not contain the expected local xdg replacement"
+          if ! grep -F "$GITHUB_WORKSPACE/xdg-compat" build-info.txt; then
+            echo "ERROR: EXE does not show local xdg replacement"
             exit 1
           fi
 
           echo "EXE dependency verification passed"
 
+      # --------------------------------------------------
       # 11. 生成 README
+      # --------------------------------------------------
       - name: Prepare README
         shell: bash
         run: |
@@ -256,7 +303,7 @@ jobs:
           CGO: disabled
 
           The V2Ray core is not included.
-          You must provide a compatible external v2ray.exe.
+          Please provide a compatible external v2ray.exe.
 
           Web interface:
           http://127.0.0.1:2017
@@ -264,7 +311,9 @@ jobs:
           This is an experimental Windows XP compatibility build.
           EOF
 
-      # 12. 检查并准备上传文件
+      # --------------------------------------------------
+      # 12. 检查发布文件
+      # --------------------------------------------------
       - name: Prepare release files
         shell: bash
         run: |
@@ -276,27 +325,34 @@ jobs:
           cp v2rayA/dist/v2raya.exe release/
           cp v2rayA/dist/README.txt release/
 
-          echo "===== Release directory ====="
+          echo "===== Release files ====="
+
           ls -lah release/
+
+          echo "===== File sizes ====="
+
+          wc -c release/v2raya.exe
+          wc -c release/README.txt
 
           test -s release/v2raya.exe
           test -s release/README.txt
 
-          echo "===== File sizes ====="
-          wc -c release/v2raya.exe release/README.txt
-
           echo "===== SHA256 ====="
+
           sha256sum release/*
 
           test "$(find release -maxdepth 1 -type f | wc -l)" -eq 2
 
+      # --------------------------------------------------
       # 13. 上传 Artifact
+      # --------------------------------------------------
       - name: Upload XP build
         uses: actions/upload-artifact@v4
         with:
-          name: v2raya-xp-x86
-          path: release/
+          name: v2raya-xp-x86-${{ github.run_number }}-${{ github.run_attempt }}
+          path: |
+            release/v2raya.exe
+            release/README.txt
           if-no-files-found: error
           compression-level: 6
-          overwrite: true
           retention-days: 7
