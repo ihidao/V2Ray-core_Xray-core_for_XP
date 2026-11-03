@@ -274,7 +274,7 @@ jobs:
 
           test -s "$GITHUB_WORKSPACE/release/start-v2raya.bat"
 
-      # ==========================================
+          # ==========================================
       # 12. 检查编译产物
       # ==========================================
       - name: Verify release files
@@ -295,9 +295,22 @@ jobs:
 
           echo "===== PE architecture ====="
 
-          file release/v2raya.exe
+          PE_INFO="$(file release/v2raya.exe)"
 
-          file release/v2raya.exe | grep -q "Intel 80386"
+          echo "$PE_INFO"
+
+          # 检查 32 位 PE 文件
+          echo "$PE_INFO" | grep -q "PE32 executable"
+
+          # 检查 Intel 386 架构
+          echo "$PE_INFO" | grep -Eq "Intel (i386|80386)"
+
+          # 检查 Windows XP 版本标识
+          echo "$PE_INFO" | grep -q "MS Windows 5.01"
+
+          echo "========================================"
+          echo "SUCCESS: Windows XP x86 executable verified"
+          echo "========================================"
 
       # ==========================================
       # 13. 上传编译结果
