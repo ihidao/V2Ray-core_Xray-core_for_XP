@@ -125,7 +125,6 @@ jobs:
 
           echo "===== Web resources installed ====="
           find "$WEB_DIR" -maxdepth 2 -type f | head -30
-
       # ==========================================
       # 8. 修复 Windows XP xdg 兼容性
       # ==========================================
@@ -136,24 +135,27 @@ jobs:
 
           cd "$GITHUB_WORKSPACE/v2rayA/service"
 
-          # 强制使用兼容版本 xdg v0.3.4
+          # 将 xdg v0.4.0 替换为 XP 兼容的 v0.3.4
           go mod edit \
             -replace=github.com/adrg/xdg=github.com/adrg/xdg@v0.3.4
 
-          go mod download
+          # 显式下载替换后的模块，补齐 go.sum
+          go mod download github.com/adrg/xdg
 
+          # 检查模块替换信息
           echo "===== xdg module information ====="
 
           go list -m -json github.com/adrg/xdg
 
-          XDG_DIR="$(go list -f '{{.Dir}}' github.com/adrg/xdg)"
+          # 使用 -mod=mod 确保必要的 go.sum 自动补齐
+          XDG_DIR="$(go list -mod=mod -f '{{.Dir}}' github.com/adrg/xdg)"
 
           echo "===== Actual xdg source directory ====="
           echo "$XDG_DIR"
 
           test -d "$XDG_DIR"
 
-          # 检查是否仍然包含 XP 不支持的 API
+          # 确认实际源码中没有 XP 不支持的 API
           if grep -R -n "SHGetKnownFolderPath" "$XDG_DIR"; then
             echo "ERROR: Incompatible SHGetKnownFolderPath API found!"
             exit 1
@@ -161,6 +163,8 @@ jobs:
 
           echo "xdg XP compatibility check passed."
 
+          # 显示最终依赖替换信息
+          go list -m all | grep 'github.com/adrg/xdg'
       # ==========================================
       # 9. 创建编译输出目录
       # ==========================================
