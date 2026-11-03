@@ -175,7 +175,7 @@ jobs:
 
           cd dist
 
-          zip -r "../v2ray-${VERSION}-xp-386.zip" .
+          zip -r "../v2ray_${VERSION}_xp_386.zip" .
 
       # ------------------------------------------------------
       # 11. 上传 Actions Artifact
@@ -183,7 +183,7 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: v2ray-${{ steps.version.outputs.version }}-xp-386
+          name: v2ray_${{ steps.version.outputs.version }}_xp_386
           path: |
             dist/v2ray.exe
             dist/v2ctl.exe
@@ -197,7 +197,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: v2ray-${{ steps.version.outputs.version }}-xp-386.zip
+          files: v2ray_${{ steps.version.outputs.version }}_xp_386.zip
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
