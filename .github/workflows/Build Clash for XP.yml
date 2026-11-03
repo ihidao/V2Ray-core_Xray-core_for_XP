@@ -1,0 +1,252 @@
+
+name: Build Clash for XP
+
+on:
+  workflow_dispatch:
+    inputs:
+      clash_version:
+        description: 'Clash version (e.g. 1.18.0)'
+        required: false
+        default: '1.18.0'
+        type: string
+
+  push:
+    tags:
+      - 'clash-v*'
+
+# ==========================================================
+# 全局变量：以后切换版本主要修改这里
+# ==========================================================
+env:
+  CLASH_VERSION: '1.18.0'
+
+  GO_VERSION: '1.21.13'
+
+  GO_BACKPORTS_REPO: 'BieHDC/go-backports'
+  GO_BACKPORTS_REF: 'release-branch.go1.21-nt51'
+
+  CLASH_REPO: 'Dreamacro/clash'
+
+permissions:
+  contents: write
+
+jobs:
+  build-xp:
+    runs-on: ubuntu-latest
+
+    steps:
+
+      # ----------------------------------------------------
+      # 1. Checkout 主仓库
+      # ----------------------------------------------------
+      - name: Checkout this repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # ----------------------------------------------------
+      # 2. 确定 Clash 版本
+      # ----------------------------------------------------
+      - name: Determine Clash version
+        id: version
+        shell: bash
+        env:
+          INPUT_VERSION: ${{ inputs.clash_version }}
+        run: |
+          VERSION="$INPUT_VERSION"
+
+          # Tag 触发时，提取版本号
+          if [[ "$GITHUB_REF" == refs/tags/clash-v* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/clash-v}"
+          fi
+
+          # 未填写时使用全局默认版本
+          if [[ -z "$VERSION" ]]; then
+            VERSION="$CLASH_VERSION"
+          fi
+
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+          echo "================================"
+          echo "Clash Version: $VERSION"
+          echo "Go Version: $GO_VERSION"
+          echo "================================"
+
+      # ----------------------------------------------------
+      # 3. Checkout Clash 源码
+      # ----------------------------------------------------
+      - name: Checkout Clash source
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.CLASH_REPO }}
+          ref: v${{ steps.version.outputs.version }}
+          path: clash-src
+          fetch-depth: 1
+
+      # ----------------------------------------------------
+      # 4. Checkout XP Go 源码
+      # ----------------------------------------------------
+      - name: Checkout go-backports
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.GO_BACKPORTS_REPO }}
+          ref: ${{ env.GO_BACKPORTS_REF }}
+          path: go-backports
+
+      # ----------------------------------------------------
+      # 5. 安装 Bootstrap Go
+      # ----------------------------------------------------
+      - name: Setup bootstrap Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+
+      # ----------------------------------------------------
+      # 6. 编译 XP 兼容 Go 工具链
+      # ----------------------------------------------------
+      - name: Build XP-compatible Go toolchain
+        working-directory: go-backports/src
+        shell: bash
+        run: |
+          export CGO_ENABLED=0
+          ./make.bash
+
+      # ----------------------------------------------------
+      # 7. 切换到 XP Go
+      # ----------------------------------------------------
+      - name: Add XP Go to PATH
+        shell: bash
+        run: |
+          echo "$GITHUB_WORKSPACE/go-backports/bin" >> "$GITHUB_PATH"
+
+          export PATH="$GITHUB_WORKSPACE/go-backports/bin:$PATH"
+
+          go version
+          go env GOROOT GOOS GOARCH
+
+      # ----------------------------------------------------
+      # 8. 检查源码
+      # ----------------------------------------------------
+      - name: Check Clash source
+        working-directory: clash-src
+        shell: bash
+        run: |
+          echo "Clash source directory:"
+          ls -la
+
+          if [ ! -f go.mod ]; then
+            echo "错误：找不到 go.mod"
+            exit 1
+          fi
+
+          if [ ! -f main.go ]; then
+            echo "错误：找不到 main.go"
+            exit 1
+          fi
+
+          go version
+          go mod edit -json
+
+      # ----------------------------------------------------
+      # 9. 下载 Go 模块
+      # ----------------------------------------------------
+      - name: Download modules
+        working-directory: clash-src
+        env:
+          GOTOOLCHAIN: local
+        run: |
+          go mod download
+
+      # ----------------------------------------------------
+      # 10. 编译 Windows XP 32 位 Clash
+      # ----------------------------------------------------
+      - name: Build Clash for Windows XP (386)
+        working-directory: clash-src
+        env:
+          CGO_ENABLED: 0
+          GOOS: windows
+          GOARCH: 386
+          GOTOOLCHAIN: local
+        shell: bash
+        run: |
+          echo "Building Clash for XP..."
+
+          go build \
+            -o clash.exe \
+            -trimpath \
+            -ldflags "-s -w -buildid=" \
+            .
+
+          echo "Build completed."
+
+          file clash.exe
+          ls -lh clash.exe
+
+      # ----------------------------------------------------
+      # 11. 测试程序基本信息
+      # ----------------------------------------------------
+      - name: Check executable
+        working-directory: clash-src
+        shell: bash
+        run: |
+          file clash.exe
+
+          if [ ! -s clash.exe ]; then
+            echo "错误：clash.exe 不存在或为空"
+            exit 1
+          fi
+
+      # ----------------------------------------------------
+      # 12. 整理输出文件
+      # ----------------------------------------------------
+      - name: Prepare output
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        shell: bash
+        run: |
+          mkdir -p dist
+
+          cp clash-src/clash.exe dist/
+
+          cp clash-src/LICENSE dist/ 2>/dev/null || true
+
+          cat > dist/README.txt << EOF
+          Clash Windows XP 32-bit
+
+          Version: $VERSION
+          OS: Windows XP
+          Architecture: x86 (386)
+          Go: $GO_VERSION
+          CGO: Disabled
+
+          This is an experimental Windows XP compatible build.
+          Please test on Windows XP before production use.
+          EOF
+
+          cd dist
+
+          zip -r "../clash_${VERSION}_xp_386.zip" .
+
+      # ----------------------------------------------------
+      # 13. 上传 Actions Artifact
+      # ----------------------------------------------------
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: clash_${{ steps.version.outputs.version }}_xp_386
+          path: dist/
+          if-no-files-found: error
+          retention-days: 30
+
+      # ----------------------------------------------------
+      # 14. 创建 GitHub Release
+      # ----------------------------------------------------
+      - name: Create Release
+        if: startsWith(github.ref, 'refs/tags/clash-v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: clash_${{ steps.version.outputs.version }}_xp_386.zip
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
